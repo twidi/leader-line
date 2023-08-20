@@ -368,7 +368,18 @@
     }
 
     rect = element.getBoundingClientRect();
-    for (prop in rect) { bBox[prop] = rect[prop]; } // eslint-disable-line guard-for-in
+    const scale = getScale(element);
+    const scaledRect = {
+      left: rect.left / scale.x,
+      top: rect.top / scale.y,
+      right: rect.right / scale.x,
+      bottom: rect.bottom / scale.y,
+      width: rect.width / scale.x,
+      height: rect.height / scale.y
+    }
+    scaledRect.x = scaledRect.left;
+    scaledRect.y = scaledRect.top;
+    for (prop in scaledRect) { bBox[prop] = scaledRect[prop]; } // eslint-disable-line guard-for-in
 
     if (!relWindow) {
       if (!(win = doc.defaultView)) {
@@ -380,7 +391,15 @@
       bBox.top += win.pageYOffset;
       bBox.bottom += win.pageYOffset;
     }
-
+    // console.log(
+    //     'getBBox', element,
+    //     "bound = ", {x: rect.x, y: rect.y, w: rect.width, h: rect.height},
+    //     "size = ", {w: element.offsetWidth, h: element.offsetHeight},
+    //     "scale = ", scale,
+    //     "scaled = ", {x: scaledRect.x, y: scaledRect.y, w: scaledRect.width, h: scaledRect.height},
+    //     "win = ", {x: win.pageXOffset, y: win.pageYOffset},
+    //     "bBox = ", {x: bBox.x, y: bBox.y, w: bBox.width, h: bBox.height}
+    // );
     return bBox;
   }
   window.getBBox = getBBox; // [DEBUG/]
@@ -971,6 +990,7 @@
 
     // Main SVG
     props.svg = svg = baseDocument.createElementNS(SVG_NS, 'svg');
+    svg.dataset.leaderLineId = props._id;
     svg.className.baseVal = APP_ID;
     if (!svg.viewBox.baseVal) { svg.setAttribute('viewBox', '0 0 0 0'); } // for Firefox bug
     props.defs = defs = svg.appendChild(baseDocument.createElementNS(SVG_NS, 'defs'));
@@ -1110,7 +1130,7 @@
       svg.style.visibility = 'hidden';
     }
 
-    baseDocument.body.appendChild(svg);
+    props.container.appendChild(svg);
 
     // label (after appendChild(svg), bBox is used)
     [0, 1, 2].forEach(function(i) {
@@ -1535,6 +1555,12 @@
       curStats.capsMaskAnchor_strokeWidthSE[i] = strokeWidth;
       return anchorBBox;
     });
+
+    // console.log(
+    //     "anchorBBoxSE",
+    //     "0 = ", {left: anchorBBoxSE[0].left, top: anchorBBoxSE[0].top},
+    //     "1 = ", {left: anchorBBoxSE[1].left, top: anchorBBoxSE[1].top}
+    // );
 
     // Decide each socket
     (function() {
@@ -2047,6 +2073,54 @@
   }
 
   /**
+   * Get the scale of the element. Only use the `scale` property (not `transform`) going up the DOM tree.
+   *
+   * @param element
+   * @return {{x: number, y: number}}
+   */
+  function getScale(element){
+    let scale = 1, style, elScale;
+    do {
+      elScale = window.getComputedStyle(element).scale;
+      if (elScale === 0) {
+        return {x: 0, y: 0};
+      }
+      if (elScale !== "none") {
+        scale *= elScale;
+      }
+      element = element.parentElement;
+
+    } while (element)
+    return {x: scale, y: scale};
+  }
+
+  /**
+   * @param {Element} element - The element to get the offset for
+   * @returns {offsetParent: Element, scale: {x: number, y: number}, offset: {x: number, y: number}} The different adjustment values.
+   */
+  function getAdjustments(element) {
+    const win = element.ownerDocument.defaultView;
+    let offsetParent = element.firstElementChild?.offsetParent
+      ? element.firstElementChild.offsetParent
+      : win.getComputedStyle(element).position === "static" ? element.offsetParent : element;
+    let bound = offsetParent.getBoundingClientRect();
+    const scale = getScale(element);
+    // console.log(
+    //     'getRelativeOffset', element,
+    //     "bound = ", {x: bound.x, y: bound.y},
+    //     "size = ", {w: element.offsetWidth, h: element.offsetHeight},
+    //     "scale = ", scale,
+    //     "win = ", {x: win.pageXOffset, y: win.pageYOffset},
+    //     "offset = ", {x: bound.x / scale.x + win.pageXOffset, y: bound.y / scale.y + win.pageYOffset}
+    // );
+    return {
+      offsetParent: offsetParent,
+      scale: scale,
+      offset: {x: bound.x / scale.x + win.pageXOffset, y: bound.y / scale.y + win.pageYOffset}
+    };
+  }
+
+  /**
    * @param {props} props - `props` of `LeaderLine` instance.
    * @returns {boolean} `true` if it was changed.
    */
@@ -2058,30 +2132,59 @@
       viewBox = props.svg.viewBox.baseVal, styles = props.svg.style,
       updated = false;
 
+    const adjustment = getAdjustments(props.container);
+
     // Expand bBox with `line` or symbols, and event
     padding = Math.max(curStats.line_strokeWidth / 2,
       curStats.viewBox_plugBCircleSE[0] || 0, curStats.viewBox_plugBCircleSE[1] || 0);
-    edge = {x1: curEdge.x1 - padding, y1: curEdge.y1 - padding,
-      x2: curEdge.x2 + padding, y2: curEdge.y2 + padding};
+    const paddingX = padding / adjustment.scale.x;
+    const paddingY = padding / adjustment.scale.y;
+    edge = {x1: curEdge.x1 - paddingX, y1: curEdge.y1 - paddingY,
+      x2: curEdge.x2 + paddingX, y2: curEdge.y2 + paddingY};
     if (props.events.new_edge4viewBox) {
       props.events.new_edge4viewBox.forEach(function(handler) { handler(props, edge); });
     }
+    // console.log(
+    //     "edges: before = ", {x1: curEdge.x1, y1: curEdge.y1, x2: curEdge.x2, y2: curEdge.y2},
+    //     "padding = ", {orig: padding, x: paddingX, y: paddingY},
+    //     "edges after = ", edge
+    // );
 
     curBBox.x = curStats.lineMask_x = curStats.lineOutlineMask_x = curStats.maskBGRect_x = edge.x1;
     curBBox.y = curStats.lineMask_y = curStats.lineOutlineMask_y = curStats.maskBGRect_y = edge.y1;
     curBBox.width = edge.x2 - edge.x1;
     curBBox.height = edge.y2 - edge.y1;
 
-    ['x', 'y', 'width', 'height'].forEach(function(boxKey) {
-      var value;
-      if ((value = curBBox[boxKey]) !== aplBBox[boxKey]) {
+    ['x', 'y'].forEach(function(boxKey) {
+      var value = curBBox[boxKey];
+      if (value !== aplBBox[boxKey]) {
         traceLog.add(boxKey); // [DEBUG/]
         viewBox[boxKey] = aplBBox[boxKey] = value;
-        styles[BBOX_PROP[boxKey]] = value +
-          (boxKey === 'x' || boxKey === 'y' ? props.bodyOffset[boxKey] : 0) + 'px';
+        updated = true;
+      }
+      var styleValue = value + (props.bodyOffset[boxKey] - adjustment.offset[boxKey]) + 'px';
+      if (styleValue !== styles[BBOX_PROP[boxKey]]) {
+        traceLog.add(boxKey + " (style)"); // [DEBUG/]
+        styles[BBOX_PROP[boxKey]] = styleValue;
         updated = true;
       }
     });
+
+    ['width', 'height'].forEach(function(boxKey) {
+      var value = curBBox[boxKey];
+      if (value !== aplBBox[boxKey]) {
+        traceLog.add(boxKey); // [DEBUG/]
+        viewBox[boxKey] = aplBBox[boxKey] = value;
+        styles[BBOX_PROP[boxKey]] = value + 'px';
+        updated = true;
+      }
+    });
+
+    // console.log(
+    //     'updateViewBox', props.container, props.svg,
+    //     "values = ", {x: curBBox.x, y: curBBox.y, w: curBBox.width, h: curBBox.height},
+    //     "final = ", {x: styles.left, y: styles.top, w: styles.width, h: styles.height}
+    // );
 
     if (!updated) { traceLog.add('not-updated'); } // [DEBUG/]
     traceLog.add('</updateViewBox>'); // [DEBUG/]
@@ -3348,8 +3451,9 @@
    * @param {Element} [start] - Alternative to `options.start`.
    * @param {Element} [end] - Alternative to `options.end`.
    * @param {Object} [options] - Initial options.
+   * @param {Element} [container] - A DOM element to contain the arrows. Will use `document.body` if not specified.
    */
-  function LeaderLine(start, end, options) {
+  function LeaderLine(start, end, options, container) {
     var props = {
       // Initialize properties as array.
       options: {anchorSE: [], socketSE: [], socketGravitySE: [], plugSE: [], plugColorSE: [], plugSizeSE: [],
@@ -3375,16 +3479,77 @@
     props._id = this._id;
     insProps[this._id] = props;
 
-    if (arguments.length === 1) {
-      options = start;
-      start = null;
+    // handle arguments
+    let argsAreValid = false;
+    switch (arguments.length) {
+      case 1: // we have only options
+        if (start.start && start.end) {
+          options = start;
+          container = null;
+          end = null
+          start = null;
+          argsAreValid = true;
+        }
+        break;
+      case 2:
+        // possible cases:
+        // - start and end
+        // - start and options
+        // - options and container
+        if (start.start && start.end && isElement(end)) { // first arg is options, second is container
+          options = start;
+          container = end;
+          end = null;
+          start = null;
+          argsAreValid = true;
+        } else if (!start.start && !start.end) { // first arg is not options => it's start
+          container = null;  // second arg is end or options, no container
+          if (end.end) { // second arg is options
+            options = end;
+            end = null;
+            argsAreValid = true;
+          } else { // we have start and end, no options
+            argsAreValid = true;
+          }
+        }
+        break;
+      case 3:
+        // possible cases:
+        // - start, end and options
+        // - start, end and container
+        // - start, options and container
+        argsAreValid = true; // cannot detect wrong arguments here
+        if (isElement(options)) { // third arg is container
+          container = options;
+          if (end.end) { // second arg is options
+            options = end;
+            end = null;
+          } else { // second arg is end
+            options = null;
+          }
+        } // else: args are in correct order
+        break;
+      case 4:
+        // arguments are in correct order
+        argsAreValid = true;
     }
-    options = options || {};
-    if (start || end) {
-      options = copyTree(options);
-      if (start) { options.start = start; }
-      if (end) { options.end = end; }
+    if (argsAreValid) {
+      if (start || end) {
+        options = options ? copyTree(options) : {};
+        if (start) { options.start = start; }
+        if (end) { options.end = end; }
+      }
+      if (!options?.start || !options?.end) {
+        argsAreValid = false;
+      }
     }
+    if (!argsAreValid) {
+        throw new Error('Invalid arguments');
+    }
+
+    Object.defineProperty(this, 'container', {value: container || document.body});
+    props.container = this.container;
+
     props.isShown = props.aplStats.show_on = !options.hide; // isShown is applied in setOptions -> bindWindow
     this.setOptions(options);
   }
@@ -3515,10 +3680,7 @@
     });
     if (curStats.show_animId) { anim.remove(curStats.show_animId); }
     props.attachments.slice().forEach(function(attachProps) { unbindAttachment(props, attachProps); });
-
-    if (props.baseWindow && props.svg) {
-      props.baseWindow.document.body.removeChild(props.svg);
-    }
+    props.svg?.parentNode?.removeChild(props.svg);
     delete insProps[this._id];
   };
 
@@ -3708,11 +3870,15 @@
         return num != null && (allowNegative || num >= 0) ? [num, ratio] : null;
       },
 
-      checkElement: function(element) {
+      checkElement: function(element, name, baseDocument) {
+        if (!name) { name = 'element'; }
         if (element == null) {
           element = document.body;
         } else if (!isElement(element)) {
-          throw new Error('`element` must be Element');
+          throw new Error(`${name} must be Element`);
+        }
+        if (baseDocument && element.ownerDocument !== baseDocument) {
+            throw new Error(`${name} must be in the same document`);
         }
         return element;
       }
@@ -3729,6 +3895,7 @@
         traceLog.add('<ATTACHMENTS.areaAnchor.init>'); // [DEBUG/]
         var points = [], baseDocument, svg, window;
         attachProps.element = ATTACHMENTS.pointAnchor.checkElement(attachOptions.element);
+        attachProps.container = ATTACHMENTS.pointAnchor.checkElement(attachOptions.container, 'container', attachProps.element.ownerDocument);
         if (typeof attachOptions.color === 'string') {
           attachProps.color = attachOptions.color.trim();
         }
@@ -3788,7 +3955,7 @@
         attachProps.path.style.fill = attachProps.fill || 'none';
         attachProps.isShown = false;
         svg.style.visibility = 'hidden';
-        baseDocument.body.appendChild(svg);
+        attachProps.container.appendChild(svg);
         setupWindow((window = baseDocument.defaultView));
         attachProps.bodyOffset = getBodyOffset(window); // Get `bodyOffset`
 
@@ -4242,7 +4409,7 @@
             attachProps.element.style[styleKey] = attachProps.style[styleKey];
           }
         });
-        bBox = attachProps.element.getBoundingClientRect();
+        bBox = getBBox(attachProps.element);
 
         // height (simulate min-height with current style (particularly box-sizing))
         if (bBox.height < conf.minHeight) {

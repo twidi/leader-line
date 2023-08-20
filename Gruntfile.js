@@ -44,7 +44,8 @@ module.exports = grunt => {
   }
 
   function minJs(content) {
-    return uglify.minify(content).code;
+    // return uglify.minify(content).code;
+    return content;
   }
 
   grunt.initConfig({
